@@ -760,6 +760,18 @@ handle_request(Request0 = #request{socket_opts = SocketOpts},
     %% Do not change the state
     {reply, {ok, Request#request.id}, State0};
 
+%% Per-request unix_socket: force a new, non-persistent connection
+%% so that requests with different socket paths never share a session.
+handle_request(#request{unix_socket = UnixSocket} = Request0,
+               State0)
+  when UnixSocket =/= undefined ->
+    Request = handle_cookies(generate_request_id(Request0), State0),
+    Headers =
+	(Request#request.headers)#http_request_h{connection
+						    = "close"},
+    start_handler(Request#request{headers = Headers}, State0),
+    {reply, {ok, Request#request.id}, State0};
+
 handle_request(Request, State = #state{options = Options}) ->
     NewRequest = handle_cookies(generate_request_id(Request), State),
     SessionType = session_type(Options),

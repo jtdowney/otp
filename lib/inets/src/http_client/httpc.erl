@@ -226,6 +226,7 @@ request(Url, Profile) ->
                         | {headers_as_is, boolean()}
                         | {socket_opts, [SocketOpt]}
                         | {receiver, Receiver}
+                        | {unix_socket, string() | undefined}
                         | {ipv6_host_with_brackets, boolean()},
       StreamTo :: none | self | {self, once} | file:name_all(),
       SocketOpt :: term(),
@@ -413,6 +414,19 @@ Options details:
 
   Default is the `pid` of the process calling the request function (`self/0`).
 
+- **`unix_socket`** - Experimental option for sending this request over a unix
+  domain socket. The value of `unix_socket` shall be the full path to a unix
+  domain socket file with read/write permissions for the erlang process.
+  Default is `undefined`.
+
+  Overrides any value set by function [set_options](`set_options/1`).
+
+  > #### Note {: .info }
+  >
+  > Persistent connections are not supported when setting the `unix_socket`
+  > option per-request. Each request with a per-request `unix_socket` opens a
+  > new connection with `Connection: close`.
+
   [](){: #ipv6_host_with_brackets }
 
 - **`ipv6_host_with_brackets`** - Defines when parsing the Host-Port part of an
@@ -456,6 +470,7 @@ Options details:
                      | {headers_as_is, boolean()}
                      | {socket_opts, [SocketOpt]}
                      | {receiver, Receiver}
+                     | {unix_socket, string() | undefined}
                      | {ipv6_host_with_brackets, boolean()},
       StreamTo :: none | self | {self, once} | file:name_all(),
       BodyFormat  :: string | binary,
@@ -1339,6 +1354,7 @@ maybe_format_body(BinBody, Options) ->
                         | {headers_as_is, boolean()}
                         | {socket_opts, [SocketOpt]}
                         | {receiver, Receiver}
+                        | {unix_socket, string() | undefined}
                         | {ipv6_host_with_brackets, boolean()},
       BodyFormat  :: string | binary,
       StreamTo :: none | self | {self, once} | file:name_all(),
@@ -1542,6 +1558,15 @@ request_options_defaults() ->
 
     VerifyBrackets = VerifyBoolean,
 
+    VerifyUnixSocket =
+	fun(undefined) ->
+		ok;
+	   (Value) when is_list(Value), length(Value) > 0 ->
+		ok;
+	   (_) ->
+		error
+	end,
+
     [
      {sync,                    true,      VerifySync}, 
      {stream,                  none,      VerifyStream},
@@ -1550,6 +1575,7 @@ request_options_defaults() ->
      {headers_as_is,           false,     VerifyHeaderAsIs},
      {receiver,                alias(),    VerifyReceiver},
      {socket_opts,             undefined, VerifySocketOpts},
+     {unix_socket,             undefined, VerifyUnixSocket},
      {ipv6_host_with_brackets, false,     VerifyBrackets}
     ]. 
 
@@ -1597,6 +1623,7 @@ request_options([{Key, DefaultVal, Verify} | Defaults], Options, Acc) ->
                      | {headers_as_is, boolean()}
                      | {socket_opts, [SocketOpt]}
                      | {receiver, Receiver}
+                     | {unix_socket, string() | undefined}
                      | {ipv6_host_with_brackets, boolean()},
       StreamTo :: none | self | {self, once} | file:name_all(),
       BodyFormat  :: string | binary,

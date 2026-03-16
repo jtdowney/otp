@@ -772,13 +772,11 @@ handle_unix_socket_options(#request{unix_socket = UnixSocket}, Options)
     Options;
 
 handle_unix_socket_options(#request{unix_socket = UnixSocket},
-                           Options = #options{ipfamily = IpFamily}) ->
-    case IpFamily of
-        local ->
-            Options#options{unix_socket = UnixSocket};
-        Else ->
-            error({badarg, [{ipfamily, Else}, {unix_socket, UnixSocket}]})
-    end.
+                           Options) ->
+    Options#options{unix_socket = UnixSocket,
+                    ipfamily = local,
+                    ip = default,
+                    port = default}.
 
 connect_and_send_first_request(Address, Request, #state{options = Options0} = State) ->
     SocketType  = socket_type(Request),

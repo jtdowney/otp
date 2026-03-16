@@ -47,6 +47,7 @@
 %% Using hardcoded file path to keep it below 107 characters
 %% (maximum length supported by erlang)
 -define(UNIX_SOCKET, "/tmp/inets_httpc_SUITE.sock").
+-define(UNIX_SOCKET_2, "/tmp/inets_httpc_SUITE_2.sock").
 
 %%--------------------------------------------------------------------
 %% Common Test interface functions -----------------------------------
@@ -157,6 +158,10 @@ real_requests_esi() ->
 
 simulated_unix_socket() ->
     [unix_domain_socket,
+    unix_domain_socket_per_request,
+    unix_domain_socket_no_session_reuse,
+    unix_domain_socket_per_request_override,
+    unix_domain_socket_per_request_with_ip,
     invalid_ipfamily_unix_socket].
 
 only_simulated() ->
@@ -279,6 +284,7 @@ init_per_group(http_unix_socket = Group, Config0) ->
             {skip, "Unix Domain Sockets are not supported on Windows"};
         _ ->
             file:delete(?UNIX_SOCKET),
+            file:delete(?UNIX_SOCKET_2),
             start_apps(Group),
             Config = proplists:delete(port, Config0),
             {Pid, Port, HttpcOpts} = server_start(Group, server_config(Group, Config)),
@@ -312,6 +318,10 @@ init_per_group(Group, Config0) ->
     Port = server_start(Group, server_config(Group, Config)),
     [{port, Port} | Config].
 
+end_per_group(http_unix_socket, _Config) ->
+    file:delete(?UNIX_SOCKET),
+    file:delete(?UNIX_SOCKET_2),
+    ok;
 end_per_group(_, _Config) ->
     ok.
 
@@ -365,6 +375,22 @@ init_per_testcase(Name, Config) when Name == pipeline; Name == persistent_connec
                             {max_pipeline_length, 3} | GivenOptions], Name),
 
     [{profile, Name} | Config];
+init_per_testcase(unix_domain_socket_per_request = Case, Config) ->
+    {ok, _Pid} = inets:start(httpc, [{profile, Case}]),
+    [{profile, Case} | Config];
+init_per_testcase(unix_domain_socket_no_session_reuse = Case, Config) ->
+    {ok, _Pid} = inets:start(httpc, [{profile, Case}]),
+    [{profile, Case} | Config];
+init_per_testcase(unix_domain_socket_per_request_override = Case, Config) ->
+    {ok, _Pid} = inets:start(httpc, [{profile, Case}]),
+    ok = httpc:set_options([{ipfamily, local},
+                            {unix_socket, ?UNIX_SOCKET_2}], Case),
+    [{profile, Case} | Config];
+init_per_testcase(unix_domain_socket_per_request_with_ip = Case, Config) ->
+    {ok, _Pid} = inets:start(httpc, [{profile, Case}]),
+    ok = httpc:set_options([{ip, {127, 0, 0, 1}},
+                            {port, 0}], Case),
+    [{profile, Case} | Config];
 init_per_testcase(Case, Config) ->
     {ok, _Pid} = inets:start(httpc, [{profile, Case}]),
     GivenOptions = proplists:get_value(httpc_options, Config, []),
@@ -2096,6 +2122,87 @@ unix_domain_socket(Config) when is_list(Config) ->
     {ok, {{_,200,_}, [_ | _], _}}
         = httpc:request(get, {URL, []}, [], [], Profile).
 
+%%-------------------------------------------------------------------------
+unix_domain_socket_per_request() ->
+    [{doc, "Test HTTP requests over unix domain sockets using per-request option"}].
+unix_domain_socket_per_request(Config) when is_list(Config) ->
+    URL = "http:///v1/kv/foo",
+    Profile = ?profile(Config),
+
+    %% Verify unix_socket is NOT set at the profile level
+    {ok, [{unix_socket, undefined}]} =
+        httpc:get_options([unix_socket], Profile),
+
+    %% Pass unix_socket per-request in Options (4th arg)
+    ReqOpts = [{unix_socket, ?UNIX_SOCKET}],
+    {ok, {{_, 200, _}, [_ | _], _}} =
+        httpc:request(put, {URL, [], [], ""}, [], ReqOpts, Profile),
+    {ok, {{_, 200, _}, [_ | _], _}} =
+        httpc:request(get, {URL, []}, [], ReqOpts, Profile).
+
+%%-------------------------------------------------------------------------
+unix_domain_socket_no_session_reuse() ->
+    [{doc, "Test that per-request unix_socket forces non-persistent connections "
+           "so requests with different socket paths never share a session"}].
+unix_domain_socket_no_session_reuse(Config) when is_list(Config) ->
+    URL = "http:///v1/kv/foo",
+    Profile = ?profile(Config),
+
+    %% Verify unix_socket is NOT set at the profile level
+    {ok, [{unix_socket, undefined}]} =
+        httpc:get_options([unix_socket], Profile),
+
+    %% First request to the real server should succeed
+    ReqOpts1 = [{unix_socket, ?UNIX_SOCKET}],
+    {ok, {{_, 200, _}, [_ | _], _}} =
+        httpc:request(get, {URL, []}, [], ReqOpts1, Profile),
+
+    %% Second request to a non-existent socket should fail,
+    %% proving the keep-alive connection from the first request
+    %% is NOT reused (Connection: close was sent).
+    ReqOpts2 = [{unix_socket, ?UNIX_SOCKET_2}],
+    {error, _} =
+        httpc:request(get, {URL, []}, [], ReqOpts2, Profile),
+
+    %% Third request back to the real server should still succeed
+    %% (no stale session state left over)
+    {ok, {{_, 200, _}, [_ | _], _}} =
+        httpc:request(get, {URL, []}, [], ReqOpts1, Profile).
+
+%%-------------------------------------------------------------------------
+unix_domain_socket_per_request_override() ->
+    [{doc, "Test that per-request unix_socket overrides a profile-level unix_socket"}].
+unix_domain_socket_per_request_override(Config) when is_list(Config) ->
+    URL = "http:///v1/kv/foo",
+    Profile = ?profile(Config),
+
+    %% Profile is configured with a non-existent unix socket (UNIX_SOCKET_2)
+    {ok, [{unix_socket, ?UNIX_SOCKET_2}]} =
+        httpc:get_options([unix_socket], Profile),
+
+    %% Per-request unix_socket overrides the profile setting
+    ReqOpts = [{unix_socket, ?UNIX_SOCKET}],
+    {ok, {{_, 200, _}, [_ | _], _}} =
+        httpc:request(get, {URL, []}, [], ReqOpts, Profile).
+
+%%-------------------------------------------------------------------------
+unix_domain_socket_per_request_with_ip() ->
+    [{doc, "Test that per-request unix_socket works even when the profile "
+           "has ip and port options set (they must be cleared for local sockets)"}].
+unix_domain_socket_per_request_with_ip(Config) when is_list(Config) ->
+    URL = "http:///v1/kv/foo",
+    Profile = ?profile(Config),
+
+    %% Profile has ip bound to 127.0.0.1 — incompatible with local sockets
+    {ok, [{ip, {127, 0, 0, 1}}]} =
+        httpc:get_options([ip], Profile),
+
+    %% Per-request unix_socket should still work; handler must clear ip/port
+    ReqOpts = [{unix_socket, ?UNIX_SOCKET}],
+    {ok, {{_, 200, _}, [_ | _], _}} =
+        httpc:request(get, {URL, []}, [], ReqOpts, Profile).
+
+%%-------------------------------------------------------------------------
 invalid_ipfamily_unix_socket() ->
     [{doc, "Test that httpc profile can't end up having invalid combination of ipfamily and unix_socket options"}].
 invalid_ipfamily_unix_socket(Config) when is_list(Config) ->
